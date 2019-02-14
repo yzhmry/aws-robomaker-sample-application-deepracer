@@ -45,7 +45,7 @@ def main():
     parser.add_argument('--markov-preset-file',
                         help="(string) Name of a preset file to run in Markov's preset directory.",
                         type=str,
-                        default=os.environ.get("MARKOV_PRESET_FILE", "object_tracker.py"))
+                        default=os.environ.get("MARKOV_PRESET_FILE", "deepracer.py"))
     parser.add_argument('-c', '--local_model_directory',
                         help='(string) Path to a folder containing a checkpoint to restore the model from.',
                         type=str,
