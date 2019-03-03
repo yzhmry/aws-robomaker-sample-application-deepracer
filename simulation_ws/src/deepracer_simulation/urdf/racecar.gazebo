@@ -53,6 +53,7 @@
   <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
     <robotNamespace>/racecar</robotNamespace>
     <robotSimType>gazebo_ros_control/DefaultRobotHWSim</robotSimType>
+    <legacyModeNS>true</legacyModeNS>
   </plugin>
   <plugin name="racecar_plugin" filename="libracecar_plugin.so">
   </plugin>
@@ -66,6 +67,9 @@
       <update_rate>15.0</update_rate>
       <!-- math.atan(320 / 687.8065795898438) * 2 -->
       <camera name="zed_camera_left_camera">
+        <save enabled="false">
+          <path>/home/mark/camera_video</path>
+        </save>
         <horizontal_fov>1.13</horizontal_fov>
         <image>
           <width>640</width>

@@ -44,6 +44,7 @@ class S3BotoDataStore(DataStore):
         return True
 
     def save_to_store(self):
+        return True
         try:
             s3_client = self._get_client()
 

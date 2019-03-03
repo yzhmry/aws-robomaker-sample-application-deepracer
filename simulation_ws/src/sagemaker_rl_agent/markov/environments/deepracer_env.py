@@ -46,6 +46,76 @@ SLEEP_AFTER_RESET_TIME_IN_SECOND = 0.5
 SLEEP_BETWEEN_ACTION_AND_REWARD_CALCULATION_TIME_IN_SECOND = 0.1
 SLEEP_WAITING_FOR_IMAGE_TIME_IN_SECOND = 0.01
 
+def reward_function_v2(on_track, x, y, distance_from_center, car_orientation, progress, steps, throttle, steering, track_width, waypoints, closest_waypoint):
+
+    '''
+    @on_track (boolean) :: The vehicle is off-track if the front of the vehicle is outside of the white
+    lines
+
+    @x (float range: [0, 1]) :: Fraction of where the car is along the x-axis. 1 indicates
+    max 'x' value in the coordinate system.
+
+    @y (float range: [0, 1]) :: Fraction of where the car is along the y-axis. 1 indicates
+    max 'y' value in the coordinate system.
+
+    @distance_from_center (float [0, track_width/2]) :: Displacement from the center line of the track
+    as defined by way points
+
+    @car_orientation (float: [-3.14, 3.14]) :: yaw of the car with respect to the car's x-axis in
+    radians
+
+    @progress (float: [0,1]) :: % of track complete
+
+    @steps (int) :: numbers of steps completed
+
+    @throttle :: (float) 0 to 1 (0 indicates stop, 1 max throttle)
+
+    @steering :: (float) -1 to 1 (-1 is right, 1 is left)
+
+    @track_width (float) :: width of the track (> 0)
+
+    @waypoints (ordered list) :: list of waypoint in order; each waypoint is a set of coordinates
+    (x,y,yaw) that define a turning point
+
+    @closest_waypoint (int) :: index of the closest waypoint (0-indexed) given the car's x,y
+    position as measured by the eucliedean distance
+
+    @@output: @reward (float [-1e5, 1e5])
+    '''
+
+    import math
+
+    reward = 1e-3
+
+    # Stay on the track!
+
+    if not on_track:
+        reward = -1
+    elif progress == 1:
+        reward = 1e-3
+    else:
+        reward = reward * progress
+
+    # Keep the car tight to the centerline
+
+    if distance_from_center >= 0.0 and distance_from_center <= 0.03:
+        reward = 1.0
+
+    # Need for Speed!
+    if throttle < 0.5:
+        reward *= 1 - (0.5 * throttle)
+
+    # Please keep the steering controlled, reduce reward for wild steering
+    if abs(steering) > .75:
+        reward *= 0.75
+
+    # add throttle penalty
+    if throttle < 0.5:
+        reward *= 0.80
+
+    return float(reward)
+
+    
 ### Gym Env ###
 class DeepRacerEnv(gym.Env):
     def __init__(self):
@@ -226,12 +296,11 @@ class DeepRacerEnv(gym.Env):
                 reward = FINISHED / self.steps
                 done = True
         else:
-            reward = self.reward_function(on_track, self.x, self.y, self.distance_from_center, self.yaw,
+            reward = reward_function_v2(on_track, self.x, self.y, self.distance_from_center, self.yaw,
                                           total_progress, self.steps, throttle, steering_angle, self.road_width,
                                           list(self.waypoints), self.get_closest_waypoint())
 
-        print('Step No=%.2f' % self.steps,
-              'Step Reward=%.2f' % reward)
+        # print('Step No=%.2f' % self.steps, 'Step Reward=%.2f' % reward)
 
         self.reward_in_episode += reward
         self.reward = reward
@@ -239,6 +308,7 @@ class DeepRacerEnv(gym.Env):
         self.next_state = state
 
     def send_reward_to_cloudwatch(self, reward):
+        return 
         session = boto3.session.Session()
         cloudwatch_client = session.client('cloudwatch', region_name=self.aws_region)
         cloudwatch_client.put_metric_data(
@@ -321,32 +391,13 @@ class DeepRacerDiscreteEnv(DeepRacerEnv):
     def __init__(self):
         DeepRacerEnv.__init__(self)
 
-        # actions -> straight, left, right
-        self.action_space = spaces.Discrete(5)
+        steering_angle = np.linspace(-0.8, 0.8, 10)
+        throttle = np.linspace(0.4, 1, 10)
+        self.continous_action = np.array(np.meshgrid(steering_angle, throttle)).T.reshape((-1, 2))
+        self.action_space = spaces.Discrete(100)
 
     def step(self, action):
-
-        # Convert discrete to continuous
-        if action == 0:  # move left
-            steering_angle = 0.8
-            throttle = 0.3
-        elif action == 1:  # move right
-            steering_angle = -0.8  # -1 #-0.5 #-1
-            throttle = 0.3
-        elif action == 2:  # straight
-            steering_angle = 0
-            throttle = 0.3
-        elif action == 3:  # move left
-            steering_angle = 0.4
-            throttle = 0.3
-        elif action == 4:  # move right
-            steering_angle = -0.4  # -1 #-0.5 #-1
-            throttle = 0.3
-        else:  # should not be here
-            raise ValueError("Invalid action")
-
-        continous_action = [steering_angle, throttle]
-
+        continous_action = self.continous_action[action]
         return super().step(continous_action)
 
 
