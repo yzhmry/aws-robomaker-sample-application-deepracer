@@ -4,7 +4,7 @@ MAX_STEPS = 1000
 
 register(
     id='RoboMaker-DeepRacer-v0',
-    entry_point='markov.environments.deepracer_env:DeepRacerDiscreteEnv',
+    entry_point='markov.environments.deepracer_env:DeepRacerContinuesEnv',
     max_episode_steps=MAX_STEPS,
     reward_threshold=200
 )

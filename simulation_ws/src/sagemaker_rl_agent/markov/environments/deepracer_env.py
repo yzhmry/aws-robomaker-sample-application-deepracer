@@ -1,16 +1,18 @@
 from __future__ import print_function
 
 import time
+import numpy
 
 # only needed for fake driver setup
 import boto3
+
 # gym
 import gym
 import numpy as np
 from gym import spaces
 from PIL import Image
 import os
-import math
+
 
 # Type of worker
 SIMULATION_WORKER = "SIMULATION_WORKER"
@@ -19,6 +21,10 @@ SAGEMAKER_TRAINING_WORKER = "SAGEMAKER_TRAINING_WORKER"
 node_type = os.environ.get("NODE_TYPE", SIMULATION_WORKER)
 
 if node_type == SIMULATION_WORKER:
+    import sys
+    print('sys.path --------------')
+    for i in sys.path:
+        print(i)
     import rospy
     from ackermann_msgs.msg import AckermannDriveStamped
     from gazebo_msgs.msg import ModelState
@@ -26,6 +32,8 @@ if node_type == SIMULATION_WORKER:
 
     from sensor_msgs.msg import Image as sensor_image
     from deepracer_msgs.msg import Progress
+    from .monitor import Monitor
+
 
 TRAINING_IMAGE_SIZE = (160, 120)
 FINISH_LINE = 100
@@ -46,76 +54,7 @@ SLEEP_AFTER_RESET_TIME_IN_SECOND = 0.5
 SLEEP_BETWEEN_ACTION_AND_REWARD_CALCULATION_TIME_IN_SECOND = 0.1
 SLEEP_WAITING_FOR_IMAGE_TIME_IN_SECOND = 0.01
 
-def reward_function_v2(on_track, x, y, distance_from_center, car_orientation, progress, steps, throttle, steering, track_width, waypoints, closest_waypoint):
 
-    '''
-    @on_track (boolean) :: The vehicle is off-track if the front of the vehicle is outside of the white
-    lines
-
-    @x (float range: [0, 1]) :: Fraction of where the car is along the x-axis. 1 indicates
-    max 'x' value in the coordinate system.
-
-    @y (float range: [0, 1]) :: Fraction of where the car is along the y-axis. 1 indicates
-    max 'y' value in the coordinate system.
-
-    @distance_from_center (float [0, track_width/2]) :: Displacement from the center line of the track
-    as defined by way points
-
-    @car_orientation (float: [-3.14, 3.14]) :: yaw of the car with respect to the car's x-axis in
-    radians
-
-    @progress (float: [0,1]) :: % of track complete
-
-    @steps (int) :: numbers of steps completed
-
-    @throttle :: (float) 0 to 1 (0 indicates stop, 1 max throttle)
-
-    @steering :: (float) -1 to 1 (-1 is right, 1 is left)
-
-    @track_width (float) :: width of the track (> 0)
-
-    @waypoints (ordered list) :: list of waypoint in order; each waypoint is a set of coordinates
-    (x,y,yaw) that define a turning point
-
-    @closest_waypoint (int) :: index of the closest waypoint (0-indexed) given the car's x,y
-    position as measured by the eucliedean distance
-
-    @@output: @reward (float [-1e5, 1e5])
-    '''
-
-    import math
-
-    reward = 1e-3
-
-    # Stay on the track!
-
-    if not on_track:
-        reward = -1
-    elif progress == 1:
-        reward = 1e-3
-    else:
-        reward = reward * progress
-
-    # Keep the car tight to the centerline
-
-    if distance_from_center >= 0.0 and distance_from_center <= 0.03:
-        reward = 1.0
-
-    # Need for Speed!
-    if throttle < 0.5:
-        reward *= 1 - (0.5 * throttle)
-
-    # Please keep the steering controlled, reduce reward for wild steering
-    if abs(steering) > .75:
-        reward *= 0.75
-
-    # add throttle penalty
-    if throttle < 0.5:
-        reward *= 0.80
-
-    return float(reward)
-
-    
 ### Gym Env ###
 class DeepRacerEnv(gym.Env):
     def __init__(self):
@@ -126,14 +65,19 @@ class DeepRacerEnv(gym.Env):
         self.on_track = 0
         self.progress = 0
         self.yaw = 0
-        self.x = 0
-        self.y = 0
+        self.prev_x = self.x = 0
+        self.prev_y = self.y = 0
+        self.max_speed = 0
+        self.speed = 0
+        self.start_time = time.time()
+        self.best_time = np.Inf
         self.z = 0
         self.distance_from_center = 0
         self.distance_from_border_1 = 0
         self.distance_from_border_2 = 0
         self.steps = 0
         self.progress_at_beginning_of_race = 0
+        self.monitor = Monitor('/home/mark/work/monitor_log.txt')
 
         # actions -> steering angle, throttle
         self.action_space = spaces.Box(low=np.array([-1, 0]), high=np.array([+1, +1]), dtype=np.float32)
@@ -152,9 +96,9 @@ class DeepRacerEnv(gym.Env):
             # Subscribe to ROS topics and register callbacks
             rospy.Subscriber('/progress', Progress, self.callback_progress)
             rospy.Subscriber('/camera/zed/rgb/image_rect_color', sensor_image, self.callback_image)
-            self.world_name = rospy.get_param('WORLD_NAME')
+            self.world_name = rospy.get_param('/WORLD_NAME')
             self.set_waypoints()
-            self.aws_region = rospy.get_param('ROS_AWS_REGION')
+            self.aws_region = rospy.get_param('/ROS_AWS_REGION')
 
         self.reward_in_episode = 0
         self.prev_progress = 0
@@ -163,8 +107,8 @@ class DeepRacerEnv(gym.Env):
     def reset(self):
         if node_type == SAGEMAKER_TRAINING_WORKER:
             return self.observation_space.sample()
-        print('Total Reward Reward=%.2f' % self.reward_in_episode,
-              'Total Steps=%.2f' % self.steps)
+        print('Total Reward Reward=%.2f' % self.reward_in_episode, 'Total Steps=%.2f' % self.steps)
+
         self.send_reward_to_cloudwatch(self.reward_in_episode)
 
         self.reward_in_episode = 0
@@ -174,6 +118,8 @@ class DeepRacerEnv(gym.Env):
         self.image = None
         self.steps = 0
         self.prev_progress = 0
+        self.max_speed = 0
+        self.start_time = time.time()
 
         # Reset car in Gazebo
         self.send_action(0, 0)  # set the throttle to 0
@@ -211,6 +157,9 @@ class DeepRacerEnv(gym.Env):
         else:
             raise ValueError("Unknown simulation world: {}".format(self.world_name))
 
+        self.prev_x = modelState.pose.position.x
+        self.prev_y = modelState.pose.position.y
+
         self.racecar_service(modelState)
         time.sleep(SLEEP_AFTER_RESET_TIME_IN_SECOND)
         self.progress_at_beginning_of_race = self.progress
@@ -224,8 +173,8 @@ class DeepRacerEnv(gym.Env):
         self.done = False
         self.next_state = None
 
-        steering_angle = float(action[0])
-        throttle = float(action[1])
+        steering_angle = action[0]
+        throttle = action[1]
         self.steps += 1
         self.send_action(steering_angle, throttle)
         time.sleep(SLEEP_BETWEEN_ACTION_AND_REWARD_CALCULATION_TIME_IN_SECOND)
@@ -257,13 +206,19 @@ class DeepRacerEnv(gym.Env):
 
     def reward_function(self, on_track, x, y, distance_from_center, car_orientation, progress, steps,
                         throttle, steering, track_width, waypoints, closest_waypoints):
-        if distance_from_center >= 0.0 and distance_from_center <= 0.02:
-            return 1.0
-        elif distance_from_center >= 0.02 and distance_from_center <= 0.03:
-            return 0.3
-        elif distance_from_center >= 0.03 and distance_from_center <= 0.05:
-            return 0.1
-        return 1e-3  # like crashed
+
+        speed = np.sqrt((x - self.prev_x)**2 + (y - self.prev_y)**2)
+        self.speed = speed
+
+        self.prev_x = self.x
+        self.prev_y = self.y
+
+        reward = speed / (self.max_speed + 1e-6)
+
+        if self.max_speed < speed:
+            self.max_speed = speed
+    
+        return reward
 
     def infer_reward_state(self, steering_angle, throttle):
         # Wait till we have a image from the camera
@@ -285,22 +240,27 @@ class DeepRacerEnv(gym.Env):
         self.prev_progress = total_progress
 
         if on_track != 1:
-            reward = CRASHED
             done = True
-        elif total_progress >= FINISH_LINE:  # reached max waypoints
-            print("Congratulations! You finished the race!")
+
+        if total_progress >= FINISH_LINE:  # reached max waypoints
+            print('----------- finish ------------')
             if self.steps == 0:
                 reward = 0.0
                 done = False
             else:
-                reward = FINISHED / self.steps
+                now = time.time()
+                elapsed = now - self.start_time
+                if self.best_time > elapsed:
+                    self.best_time = elapsed
                 done = True
-        else:
-            reward = reward_function_v2(on_track, self.x, self.y, self.distance_from_center, self.yaw,
+
+        reward = self.reward_function(on_track, self.x, self.y, self.distance_from_center, self.yaw,
                                           total_progress, self.steps, throttle, steering_angle, self.road_width,
                                           list(self.waypoints), self.get_closest_waypoint())
 
-        # print('Step No=%.2f' % self.steps, 'Step Reward=%.2f' % reward)
+        self.monitor.add(step=self.steps, x=self.x, y=self.y, z=self.z, throttle=throttle, steering_angle=steering_angle, reward=reward)
+        # print('step=%.3d speed = %.2f max_speed = %.2f throttle=%.2f angle=% 2.2f, (%.2f, %.2f), best-time=%.1f' %
+        #  (self.steps, self.speed, self.max_speed, throttle, steering_angle, self.x, self.y, self.best_time))
 
         self.reward_in_episode += reward
         self.reward = reward
@@ -380,7 +340,7 @@ class DeepRacerEnv(gym.Env):
         y = self.y
         minDistance = float('inf')
         for row in self.waypoints:
-            distance = math.sqrt((row[0] - x) * (row[0] - x) + (row[1] - y) * (row[1] - y))
+            distance = np.sqrt((row[0] - x) * (row[0] - x) + (row[1] - y) * (row[1] - y))
             if distance < minDistance:
                 minDistance = distance
                 res = index
@@ -395,10 +355,89 @@ class DeepRacerDiscreteEnv(DeepRacerEnv):
         throttle = np.linspace(0.4, 1, 10)
         self.continous_action = np.array(np.meshgrid(steering_angle, throttle)).T.reshape((-1, 2))
         self.action_space = spaces.Discrete(100)
+        self.prev_closest_waypoints = -1
 
     def step(self, action):
         continous_action = self.continous_action[action]
         return super().step(continous_action)
+
+
+    def reward_function(self, on_track, x, y, distance_from_center, car_orientation, progress, steps,
+                        throttle, steering, track_width, waypoints, closest_waypoints):
+        '''
+        @on_track (boolean) :: The vehicle is off-track if the front of the vehicle is outside of the white
+        lines
+
+        @x (float range: [0, 1]) :: Fraction of where the car is along the x-axis. 1 indicates
+        max 'x' value in the coordinate system.
+
+        @y (float range: [0, 1]) :: Fraction of where the car is along the y-axis. 1 indicates
+        max 'y' value in the coordinate system.
+
+        @distance_from_center (float [0, track_width/2]) :: Displacement from the center line of the track
+        as defined by way points
+
+        @car_orientation (float: [-3.14, 3.14]) :: yaw of the car with respect to the car's x-axis in
+        radians
+
+        @progress (float: [0,1]) :: % of track complete
+
+        @steps (int) :: numbers of steps completed
+
+        @throttle :: (float) 0 to 1 (0 indicates stop, 1 max throttle)
+
+        @steering :: (float) -1 to 1 (-1 is right, 1 is left)
+
+        @track_width (float) :: width of the track (> 0)
+
+        @waypoints (ordered list) :: list of waypoint in order; each waypoint is a set of coordinates
+        (x,y,yaw) that define a turning point
+
+        @closest_waypoint (int) :: index of the closest waypoint (0-indexed) given the car's x,y
+        position as measured by the eucliedean distance
+
+        @@output: @reward (float [-1e5, 1e5])
+        '''
+
+        if closest_waypoints != self.prev_closest_waypoints:
+            print('waypoints = {}, closest_waypoint = {}'.format(waypoints, closest_waypoints))
+            self.prev_closest_waypoints = closest_waypoints
+
+        # reward from pos
+        safe_distance = 0.1
+        if distance_from_center < safe_distance:
+            r_pos = 1.0
+        else:
+            r_pos = (track_width / 2.1 - distance_from_center) / (track_width / 2.1 - safe_distance)
+
+        # reward from speed
+        r_throttle = throttle
+
+        # reward from yaw
+        yaw = np.abs(car_orientation)
+        safe_angle = 3 * (np.pi / 180)
+        if yaw < safe_angle:
+            r_yaw = 1.0
+        else:
+            r_yaw = (np.pi - yaw) / (np.pi - safe_angle)
+
+        # reward from progress
+        r_prog = progress / FINISH_LINE
+
+        # 
+        if not on_track:
+            reward = -1.0
+        else:
+            # reward = (r_pos + r_throttle + r_yaw + r_prog) / 4.0
+            reward = r_throttle
+
+        print('R={:.2f} r_pos={:.2f} {:.2f} {:.2f} r_throttle={:.2f} r_yaw={:.2f} {:.2f} r_prog={:.2f}'.format(
+            reward, r_pos, distance_from_center, track_width,
+            r_throttle,
+            r_yaw, car_orientation / np.pi * 180,
+            r_prog))
+
+        return reward
 
 
 class DeepRacerMultiDiscreteEnv(DeepRacerEnv):
@@ -442,3 +481,12 @@ class DeepRacerMultiDiscreteEnv(DeepRacerEnv):
         continous_action = [steering_angle, throttle]
 
         return super().step(continous_action)
+
+
+class DeepRacerContinuesEnv(DeepRacerEnv):
+    def __init__(self):
+        DeepRacerEnv.__init__(self)
+        self.action_space = spaces.Box(low=np.array([-0.6,0.3]), high=np.array([0.6,1.0]),dtype=np.float)
+
+    def step(self, action):
+        return super().step(action)
