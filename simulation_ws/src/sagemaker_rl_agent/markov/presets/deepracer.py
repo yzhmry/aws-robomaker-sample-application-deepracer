@@ -7,20 +7,22 @@ from rl_coach.graph_managers.graph_manager import ScheduleParameters
 from rl_coach.schedules import LinearSchedule
 
 from rl_coach.exploration_policies.categorical import CategoricalParameters
+from rl_coach.exploration_policies.additive_noise import AdditiveNoiseParameters
 from rl_coach.filters.filter import NoInputFilter, NoOutputFilter, InputFilter
 from rl_coach.filters.observation.observation_stacking_filter import ObservationStackingFilter
 from rl_coach.filters.observation.observation_rgb_to_y_filter import ObservationRGBToYFilter
 from rl_coach.filters.observation.observation_to_uint8_filter import ObservationToUInt8Filter
 from rl_coach.memories.memory import MemoryGranularity
 
+from markov.e_greedy import EGreedyParameters
 ####################
 # Graph Scheduling #
 ####################
 
 schedule_params = ScheduleParameters()
 schedule_params.improve_steps = TrainingSteps(10000000)
-schedule_params.steps_between_evaluation_periods = EnvironmentEpisodes(40)
-schedule_params.evaluation_steps = EnvironmentEpisodes(5)
+schedule_params.steps_between_evaluation_periods = EnvironmentEpisodes(5)
+schedule_params.evaluation_steps = EnvironmentEpisodes(2)
 schedule_params.heatup_steps = EnvironmentSteps(0)
 
 #########
@@ -39,12 +41,16 @@ agent_params.algorithm.clip_likelihood_ratio_using_epsilon = 0.2
 agent_params.algorithm.clipping_decay_schedule = LinearSchedule(1.0, 0, 1000000)
 agent_params.algorithm.beta_entropy = 0.01  # also try 0.001
 agent_params.algorithm.gae_lambda = 0.95
-agent_params.algorithm.discount = 0.999
+agent_params.algorithm.discount = 0.9
 agent_params.algorithm.optimization_epochs = 10
 agent_params.algorithm.estimate_state_value_using_gae = True
-agent_params.algorithm.num_steps_between_copying_online_weights_to_target = EnvironmentEpisodes(20)
-agent_params.algorithm.num_consecutive_playing_steps = EnvironmentEpisodes(20)
-agent_params.exploration = CategoricalParameters()
+agent_params.algorithm.num_steps_between_copying_online_weights_to_target = EnvironmentEpisodes(5)
+agent_params.algorithm.num_consecutive_playing_steps = EnvironmentEpisodes(5)
+#exploration = CategoricalParameters()
+exploration = AdditiveNoiseParameters()
+#exploration  = EGreedyParameters()
+#exploration.epsilon_schedule = LinearSchedule(0.5, 0.01, 100000)
+agent_params.exploration = exploration
 agent_params.memory.max_size = (MemoryGranularity.Transitions, 10**5)
 
 ###############
@@ -61,6 +67,8 @@ env_params.level = 'RoboMaker-DeepRacer-v0'
 
 vis_params = VisualizationParameters()
 vis_params.dump_mp4 = False
+vis_params.tensorboard = True
+vis_params.print_networks_summary = True
 
 ########
 # Test #

@@ -28,11 +28,11 @@ class S3BotoDataStoreParameters(DataStoreParameters):
 class S3BotoDataStore(DataStore):
     def __init__(self, params: S3BotoDataStoreParameters):
         self.params = params
-        self.key_prefix = os.path.join(self.params.s3_folder, "model/")
-        self.ip_data_key = os.path.join(self.params.s3_folder, "ip/ip.json")
-        self.ip_done_key = os.path.join(self.params.s3_folder, "ip/done")
-        self.preset_data_prefix = os.path.join(self.params.s3_folder, "presets/")
-        self.environment_data_prefix = os.path.join(self.params.s3_folder, "environments/")
+        # self.key_prefix = os.path.join(self.params.s3_folder, "model/")
+        # self.ip_data_key = os.path.join(self.params.s3_folder, "ip/ip.json")
+        # self.ip_done_key = os.path.join(self.params.s3_folder, "ip/done")
+        # self.preset_data_prefix = os.path.join(self.params.s3_folder, "presets/")
+        # self.environment_data_prefix = os.path.join(self.params.s3_folder, "environments/")
 
     def deploy(self) -> bool:
         return True

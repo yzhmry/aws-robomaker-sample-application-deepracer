@@ -1,6 +1,7 @@
-"""
-This is single machine training worker. It starts a local training and stores the model in S3.
-"""
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('racecar')
 
 import argparse
 import copy
@@ -41,6 +42,10 @@ def should_stop_training_based_on_evaluation():
     return False
 
 def main():
+    print('-' * 20)
+    print('cwd = {}'.format(os.getcwd()))
+    print('-' * 20)
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--markov-preset-file',
                         help="(string) Name of a preset file to run in Markov's preset directory.",
